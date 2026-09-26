@@ -1,0 +1,90 @@
+[
+  {
+    "id": 1,
+    "vendor_name": "Apex Medico (Vendor A)",
+    "medicine": "Paracetamol 500mg",
+    "price": 10.00,
+    "minimum_order_quantity": 100,
+    "delivery_days": 2,
+    "reliability_score": 4.8,
+    "min_acceptable_price": 9.20,
+    "negotiation_profile": "Flexible on fast payments and recurring orders. Can drop up to ₹0.80."
+  },
+  {
+    "id": 2,
+    "vendor_name": "Bharat Pharma Wholesalers (Vendor B)",
+    "medicine": "Paracetamol 500mg",
+    "price": 8.00,
+    "minimum_order_quantity": 500,
+    "delivery_days": 7,
+    "reliability_score": 4.1,
+    "min_acceptable_price": 7.60,
+    "negotiation_profile": "High MOQ bulk supplier. Rigid on MOQ, strictly offers volume discounts."
+  },
+  {
+    "id": 3,
+    "vendor_name": "CureQuick Logistics (Vendor C)",
+    "medicine": "Paracetamol 500mg",
+    "price": 9.50,
+    "minimum_order_quantity": 150,
+    "delivery_days": 3,
+    "reliability_score": 4.6,
+    "min_acceptable_price": 8.90,
+    "negotiation_profile": "Moderate MOQ, quick transit. Willing to match competitors up to ₹8.90."
+  },
+  {
+    "id": 4,
+    "vendor_name": "Apex Medico (Vendor A)",
+    "medicine": "Cetirizine 10mg",
+    "price": 5.50,
+    "minimum_order_quantity": 80,
+    "delivery_days": 2,
+    "reliability_score": 4.8,
+    "min_acceptable_price": 5.10,
+    "negotiation_profile": "Quick delivery, standard discount."
+  },
+  {
+    "id": 5,
+    "vendor_name": "CureQuick Logistics (Vendor C)",
+    "medicine": "Cetirizine 10mg",
+    "price": 5.20,
+    "minimum_order_quantity": 100,
+    "delivery_days": 3,
+    "reliability_score": 4.6,
+    "min_acceptable_price": 4.80,
+    "negotiation_profile": "Competitive price for 100+ units."
+  },
+  {
+    "id": 6,
+    "vendor_name": "Bharat Pharma Wholesalers (Vendor B)",
+    "medicine": "Cetirizine 10mg",
+    "price": 4.50,
+    "minimum_order_quantity": 300,
+    "delivery_days": 6,
+    "reliability_score": 4.1,
+    "min_acceptable_price": 4.20,
+    "negotiation_profile": "Bulk order minimum 300 units."
+  },
+  {
+    "id": 7,
+    "vendor_name": "Apex Medico (Vendor A)",
+    "medicine": "Azithromycin 500mg",
+    "price": 42.00,
+    "minimum_order_quantity": 50,
+    "delivery_days": 2,
+    "reliability_score": 4.8,
+    "min_acceptable_price": 39.00,
+    "negotiation_profile": "Fast dispatch, ₹3 per unit discount margin."
+  },
+  {
+    "id": 8,
+    "vendor_name": "CureQuick Logistics (Vendor C)",
+    "medicine": "Azithromycin 500mg",
+    "price": 40.00,
+    "minimum_order_quantity": 70,
+    "delivery_days": 4,
+    "reliability_score": 4.5,
+    "min_acceptable_price": 37.50,
+    "negotiation_profile": "Moderate lead time with price flexibility."
+  }
+]

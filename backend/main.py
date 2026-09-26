@@ -1,0 +1,185 @@
+from fastapi import FastAPI, Depends, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import List, Optional, Dict, Any
+from sqlalchemy.orm import Session
+
+from backend.database.database import engine, Base, get_db
+from backend.database.models import InventoryItem, Vendor, PurchaseOrder, NegotiationRecord
+from backend.services.inventory_service import (
+    seed_inventory_if_empty,
+    get_all_inventory,
+    get_items_needing_restock,
+    get_item_by_name
+)
+from backend.services.vendor_service import (
+    seed_vendors_if_empty,
+    get_all_vendors,
+    get_vendors_for_medicine,
+    compare_vendor_offers
+)
+from backend.services.order_service import (
+    get_all_orders,
+    get_all_negotiations,
+    clear_orders_and_negotiations
+)
+from backend.agents.store_agent import RestockAgent
+
+# Initialize DB tables
+Base.metadata.create_all(bind=engine)
+
+app = FastAPI(
+    title="Pharmacy Smart Restocking & Vendor Negotiation Agent API",
+    version="1.0.0",
+    description="Backend API powering autonomous pharmacy inventory restocking and vendor negotiation."
+)
+
+# Enable CORS for frontend Vite dev server and production
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.on_event("startup")
+def startup_event():
+    """Seed initial sample data on application startup."""
+    from backend.database.database import SessionLocal
+    db = SessionLocal()
+    try:
+        seed_inventory_if_empty(db)
+        seed_vendors_if_empty(db)
+    finally:
+        db.close()
+
+
+# Pydantic schemas
+class RestockRunRequest(BaseModel):
+    medicine_name: Optional[str] = None
+
+
+class DepleteRequest(BaseModel):
+    medicine_name: str
+    deplete_by: int = 50
+
+
+class CompareRequest(BaseModel):
+    medicine_name: str
+    quantity: int = 100
+
+
+# Endpoints
+@app.get("/")
+def root():
+    return {
+        "status": "online",
+        "service": "Pharmacy Smart Restocking Agent",
+        "version": "1.0.0"
+    }
+
+
+@app.get("/api/health")
+def health():
+    return {"status": "ok"}
+
+
+@app.get("/api/inventory")
+def list_inventory(db: Session = Depends(get_db)):
+    """Return all inventory items and restock status."""
+    items = get_all_inventory(db)
+    restock_candidates = {item["medicine_name"]: item for item in get_items_needing_restock(db)}
+
+    response = []
+    for it in items:
+        is_low = it.medicine_name in restock_candidates
+        candidate_info = restock_candidates.get(it.medicine_name, {})
+        response.append({
+            "id": it.id,
+            "medicine_name": it.medicine_name,
+            "current_stock": it.current_stock,
+            "reorder_threshold": it.reorder_threshold,
+            "target_stock": it.target_stock,
+            "daily_sales": it.daily_sales,
+            "expiry_date": it.expiry_date,
+            "unit": it.unit,
+            "is_low_stock": is_low,
+            "recommended_quantity": candidate_info.get("recommended_quantity", 0),
+            "reason": candidate_info.get("reason", "Stock is sufficient."),
+            "days_of_stock_left": candidate_info.get("days_of_stock_left", round(it.current_stock / max(1, it.daily_sales), 1))
+        })
+    return response
+
+
+@app.get("/api/restock/candidates")
+def get_restock_candidates(db: Session = Depends(get_db)):
+    """Return only the items currently below reorder threshold."""
+    return get_items_needing_restock(db)
+
+
+@app.get("/api/vendors")
+def list_vendors(medicine: Optional[str] = None, db: Session = Depends(get_db)):
+    """Return all vendors or filter by medicine."""
+    if medicine:
+        return get_vendors_for_medicine(db, medicine)
+    return get_all_vendors(db)
+
+
+@app.post("/api/vendors/compare")
+def compare_vendors(req: CompareRequest, db: Session = Depends(get_db)):
+    """Compare and rank vendors offering a specific medicine."""
+    vendors = get_vendors_for_medicine(db, req.medicine_name)
+    if not vendors:
+        raise HTTPException(status_code=404, detail=f"No vendors found for '{req.medicine_name}'")
+    return compare_vendor_offers(vendors, req.quantity)
+
+
+@app.post("/api/agent/run")
+def trigger_agent(req: RestockRunRequest = RestockRunRequest(), db: Session = Depends(get_db)):
+    """
+    Execute the Store Restocking Agent cycle:
+    OBSERVE -> DECIDE -> ACT -> OBSERVE RESULT -> DECIDE AGAIN -> COMPLETE
+    """
+    agent = RestockAgent(db=db)
+    result = agent.run_restocking_cycle(target_medicine=req.medicine_name)
+    return result
+
+
+@app.get("/api/orders")
+def list_orders(db: Session = Depends(get_db)):
+    """Return all confirmed purchase orders."""
+    return get_all_orders(db)
+
+
+@app.get("/api/negotiations")
+def list_negotiations(db: Session = Depends(get_db)):
+    """Return all negotiation records and conversation transcripts."""
+    return get_all_negotiations(db)
+
+
+@app.post("/api/demo/reset")
+def reset_demo_data(db: Session = Depends(get_db)):
+    """Reset inventory and vendor data to initial baseline, clear orders and negotiation logs."""
+    clear_orders_and_negotiations(db)
+    seed_inventory_if_empty(db, force_reset=True)
+    seed_vendors_if_empty(db, force_reset=True)
+    return {"message": "Demo data successfully reset to baseline."}
+
+
+@app.post("/api/demo/deplete")
+def deplete_stock(req: DepleteRequest, db: Session = Depends(get_db)):
+    """Artificially lower stock to demonstrate restocking workflow for any medicine."""
+    item = get_item_by_name(db, req.medicine_name)
+    if not item:
+        raise HTTPException(status_code=404, detail="Medicine not found")
+    item.current_stock = max(0, item.current_stock - req.deplete_by)
+    db.commit()
+    db.refresh(item)
+    return {
+        "medicine_name": item.medicine_name,
+        "new_stock": item.current_stock,
+        "reorder_threshold": item.reorder_threshold,
+        "is_low_stock": item.current_stock <= item.reorder_threshold
+    }

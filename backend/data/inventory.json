@@ -1,0 +1,52 @@
+[
+  {
+    "id": 1,
+    "medicine_name": "Paracetamol 500mg",
+    "current_stock": 25,
+    "reorder_threshold": 60,
+    "target_stock": 200,
+    "daily_sales": 15,
+    "expiry_date": "2027-05-15",
+    "unit": "strips"
+  },
+  {
+    "id": 2,
+    "medicine_name": "Amoxicillin 250mg",
+    "current_stock": 80,
+    "reorder_threshold": 50,
+    "target_stock": 150,
+    "daily_sales": 8,
+    "expiry_date": "2026-12-30",
+    "unit": "bottles"
+  },
+  {
+    "id": 3,
+    "medicine_name": "Cetirizine 10mg",
+    "current_stock": 12,
+    "reorder_threshold": 40,
+    "target_stock": 120,
+    "daily_sales": 10,
+    "expiry_date": "2027-08-20",
+    "unit": "strips"
+  },
+  {
+    "id": 4,
+    "medicine_name": "Metformin 500mg",
+    "current_stock": 150,
+    "reorder_threshold": 80,
+    "target_stock": 250,
+    "daily_sales": 20,
+    "expiry_date": "2028-01-10",
+    "unit": "strips"
+  },
+  {
+    "id": 5,
+    "medicine_name": "Azithromycin 500mg",
+    "current_stock": 18,
+    "reorder_threshold": 35,
+    "target_stock": 100,
+    "daily_sales": 6,
+    "expiry_date": "2027-03-25",
+    "unit": "strips"
+  }
+]
