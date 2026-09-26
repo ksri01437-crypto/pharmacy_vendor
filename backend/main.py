@@ -92,14 +92,23 @@ def health():
 
 @app.get("/api/inventory")
 def list_inventory(db: Session = Depends(get_db)):
-    """Return all inventory items and restock status."""
+    """Return all inventory items with priority scoring, red/orange/green indicators, and explainability."""
+    from backend.services.inventory_service import compute_priority_and_explanation
     items = get_all_inventory(db)
     restock_candidates = {item["id"]: item for item in get_items_needing_restock(db)}
 
     response = []
     for it in items:
+        meta = compute_priority_and_explanation(
+            current_stock=it.current_stock,
+            reorder_threshold=it.reorder_threshold,
+            target_stock=it.target_stock,
+            daily_sales=it.daily_sales,
+            unit=it.unit
+        )
         is_low = it.id in restock_candidates
         candidate_info = restock_candidates.get(it.id, {})
+
         response.append({
             "id": it.id,
             "medicine_name": it.medicine_name,
@@ -110,9 +119,13 @@ def list_inventory(db: Session = Depends(get_db)):
             "expiry_date": it.expiry_date,
             "unit": it.unit,
             "is_low_stock": is_low,
-            "recommended_quantity": candidate_info.get("recommended_quantity", 0),
-            "reason": candidate_info.get("reason", "Stock is sufficient."),
-            "days_of_stock_left": candidate_info.get("days_of_stock_left", round(it.current_stock / max(1, it.daily_sales), 1))
+            "recommended_quantity": meta["recommended_quantity"],
+            "reason": meta["reason"],
+            "days_of_stock_left": meta["days_remaining_num"],
+            "priority_level": meta["priority_level"],
+            "priority_score": meta["priority_score"],
+            "priority_circle": meta["priority_circle"],
+            "explainability": meta
         })
     return response
 

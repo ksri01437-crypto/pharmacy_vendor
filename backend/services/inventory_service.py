@@ -46,23 +46,90 @@ def get_item_by_name(db: Session, medicine_name: str) -> Optional[InventoryItem]
     return db.query(InventoryItem).filter(InventoryItem.medicine_name == medicine_name).first()
 
 
+def compute_priority_and_explanation(
+    current_stock: int,
+    reorder_threshold: int,
+    target_stock: int,
+    daily_sales: int,
+    unit: str = "units"
+) -> Dict[str, Any]:
+    """
+    Computes Medicine Priority Score and the 'Why did I order this?' explainability payload.
+    Priority Rules:
+      - Stock < 1.5 days or 0: CRITICAL (🔴 red circle, score 95-100)
+      - Stock < 3.0 days: HIGH (🟠 orange circle, score 75-90)
+      - Stock <= threshold: MEDIUM (🟡 yellow circle, score 50-70)
+      - Stock > threshold: LOW / HEALTHY (🟢 green circle, score 10-30)
+    """
+    days_remaining = round(current_stock / max(1, daily_sales), 1)
+
+    deficit = max(0, target_stock - current_stock)
+    safety_buffer = daily_sales * 7
+    recommended_qty = max(deficit, safety_buffer)
+    # Round to nearest 10 for standard packaging
+    recommended_qty = int(((recommended_qty + 9) // 10) * 10)
+
+    is_low_stock = current_stock <= reorder_threshold
+
+    if days_remaining <= 1.5:
+        priority_level = "CRITICAL"
+        priority_circle = "🔴"
+        priority_score = round(max(90.0, 100.0 - (days_remaining * 5)), 1)
+        reason = "High demand + low stock"
+    elif days_remaining <= 3.0:
+        priority_level = "HIGH"
+        priority_circle = "🟠"
+        priority_score = round(max(75.0, 90.0 - (days_remaining * 5)), 1)
+        reason = "Accelerated depletion below reorder threshold"
+    elif is_low_stock:
+        priority_level = "MEDIUM"
+        priority_circle = "🟡"
+        priority_score = 60.0
+        reason = f"Current stock breached safety threshold ({reorder_threshold} {unit})"
+    else:
+        priority_level = "HEALTHY"
+        priority_circle = "🟢"
+        priority_score = 20.0
+        reason = "Stock buffer optimal, no replenishment required"
+
+    return {
+        "current_stock": current_stock,
+        "reorder_threshold": reorder_threshold,
+        "target_stock": target_stock,
+        "daily_sales": daily_sales,
+        "daily_sales_label": f"{daily_sales}/day",
+        "estimated_stock_remaining": f"{days_remaining} days",
+        "days_remaining_num": days_remaining,
+        "recommended_quantity": recommended_qty,
+        "is_low_stock": is_low_stock,
+        "priority_level": priority_level,
+        "priority_score": priority_score,
+        "priority_circle": priority_circle,
+        "reason": reason,
+        "explanation_summary": (
+            f"Why did I order this?\n"
+            f"• Current stock: {current_stock} {unit}\n"
+            f"• Reorder level: {reorder_threshold} {unit}\n"
+            f"• Daily sales: {daily_sales}/day\n"
+            f"• Estimated stock remaining: {days_remaining} days\n"
+            f"• Recommended quantity: {recommended_qty} {unit}\n"
+            f"• Reason: {reason}"
+        )
+    }
+
+
 def get_items_needing_restock(db: Session) -> List[Dict[str, Any]]:
-    """Identify medicines where current_stock is at or below reorder_threshold."""
+    """Identify medicines where current_stock is at or below reorder_threshold and rank by priority."""
     items = db.query(InventoryItem).all()
     restock_list = []
     for item in items:
         if item.current_stock <= item.reorder_threshold:
-            deficit = max(0, item.target_stock - item.current_stock)
-            safety_buffer = item.daily_sales * 7
-            recommended_qty = max(deficit, safety_buffer)
-
-            # Round to nearest 10 for standard packaging
-            recommended_qty = int(((recommended_qty + 9) // 10) * 10)
-
-            days_remaining = (
-                round(item.current_stock / item.daily_sales, 1)
-                if item.daily_sales > 0
-                else 999
+            meta = compute_priority_and_explanation(
+                current_stock=item.current_stock,
+                reorder_threshold=item.reorder_threshold,
+                target_stock=item.target_stock,
+                daily_sales=item.daily_sales,
+                unit=item.unit
             )
 
             restock_list.append({
@@ -72,11 +139,18 @@ def get_items_needing_restock(db: Session) -> List[Dict[str, Any]]:
                 "reorder_threshold": item.reorder_threshold,
                 "target_stock": item.target_stock,
                 "daily_sales": item.daily_sales,
-                "recommended_quantity": recommended_qty,
-                "days_of_stock_left": days_remaining,
+                "recommended_quantity": meta["recommended_quantity"],
+                "days_of_stock_left": meta["days_remaining_num"],
                 "unit": item.unit,
-                "reason": f"Current stock ({item.current_stock} {item.unit}) is below reorder threshold ({item.reorder_threshold} {item.unit}). Est. {days_remaining} days remaining."
+                "priority_level": meta["priority_level"],
+                "priority_score": meta["priority_score"],
+                "priority_circle": meta["priority_circle"],
+                "reason": meta["reason"],
+                "explainability": meta
             })
+
+    # Sort descending by priority_score (Critical first!)
+    restock_list.sort(key=lambda x: x["priority_score"], reverse=True)
     return restock_list
 
 

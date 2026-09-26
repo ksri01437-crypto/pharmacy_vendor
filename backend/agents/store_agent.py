@@ -124,16 +124,22 @@ class RestockAgent:
             threshold = item["reorder_threshold"]
             req_qty = item["recommended_quantity"]
 
-            # 2. DECIDE: Calculate Required Quantity
+            # 2. DECIDE: Calculate Required Quantity & Priority Rationale
+            priority_circle = item.get("priority_circle", "🔴" if item.get("days_of_stock_left", 99) < 1.5 else "🟠")
+            priority_level = item.get("priority_level", "CRITICAL" if item.get("days_of_stock_left", 99) < 1.5 else "HIGH")
+            priority_score = item.get("priority_score", 95.0 if priority_level == "CRITICAL" else 80.0)
+            days_left = item.get("days_of_stock_left", round(curr_stock / max(1, item["daily_sales"]), 1))
+            reason = item.get("reason", "High demand + low stock")
+
             self._log(
                 "DECIDE",
-                f"[{med_name}] Current stock is {curr_stock} {item['unit']} (≤ reorder threshold {threshold} {item['unit']}). Calculating required restock quantity...",
-                {"medicine_id": med_id, "medicine": med_name, "current_stock": curr_stock, "threshold": threshold}
+                f"[{med_name}] Priority: {priority_circle} {priority_level} (Score: {priority_score}/100). Current stock: {curr_stock} {item['unit']} (≤ reorder threshold {threshold} {item['unit']}). Est. remaining: {days_left} days.",
+                {"medicine_id": med_id, "medicine": med_name, "priority_level": priority_level, "priority_score": priority_score, "days_left": days_left}
             )
             self._log(
                 "DECIDE",
-                f"[{med_name}] Calculated recommended restock: {req_qty} {item['unit']} to safely reach target stock ({item['target_stock']} {item['unit']}).",
-                {"medicine_id": med_id, "recommended_quantity": req_qty}
+                f"[{med_name}] Why did I order this? Current stock: {curr_stock} | Reorder level: {threshold} | Daily sales: {item['daily_sales']}/day | Stock remaining: {days_left} days | Recommended qty: {req_qty} | Reason: {reason}.",
+                {"medicine_id": med_id, "recommended_quantity": req_qty, "reason": reason}
             )
 
             # 3. ACT: Request Vendor Offers strictly for this medicine
@@ -258,7 +264,22 @@ class RestockAgent:
                 "total_cost": po.total,
                 "comparison": comparison,
                 "negotiation": negotiation_res,
-                "po_number": po.po_number
+                "po_number": po.po_number,
+                "priority_level": priority_level,
+                "priority_score": priority_score,
+                "priority_circle": priority_circle,
+                "explainability": item.get("explainability", {
+                    "current_stock": curr_stock,
+                    "reorder_threshold": threshold,
+                    "daily_sales": item["daily_sales"],
+                    "daily_sales_label": f"{item['daily_sales']}/day",
+                    "estimated_stock_remaining": f"{days_left} days",
+                    "recommended_quantity": req_qty,
+                    "reason": reason,
+                    "priority_level": priority_level,
+                    "priority_score": priority_score,
+                    "priority_circle": priority_circle
+                })
             })
 
         self._log("COMPLETE", f"Restocking cycle successfully completed. Total orders created: {len(generated_orders)}.")
