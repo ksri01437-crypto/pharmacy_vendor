@@ -15,6 +15,7 @@ def create_purchase_order(
     original_price: float,
     negotiated_price: float,
     delivery_days: int,
+    medicine_id: Optional[int] = None,
     status: str = "Confirmed",
     update_inventory_immediately: bool = True
 ) -> PurchaseOrder:
@@ -24,6 +25,7 @@ def create_purchase_order(
 
     order = PurchaseOrder(
         po_number=po_number,
+        medicine_id=medicine_id,
         medicine=medicine,
         vendor=vendor,
         quantity=quantity,
@@ -37,9 +39,9 @@ def create_purchase_order(
     db.commit()
     db.refresh(order)
 
-    # Automatically replenish inventory stock when order is placed
+    # Replenish inventory stock for this specific medicine
     if update_inventory_immediately:
-        update_stock(db, medicine, quantity)
+        update_stock(db, medicine_name=medicine, quantity_to_add=quantity, medicine_id=medicine_id)
 
     return order
 
@@ -56,6 +58,7 @@ def record_negotiation(
     initial_price: float,
     final_price: float,
     transcript: List[Dict[str, str]],
+    medicine_id: Optional[int] = None,
     status: str = "Accepted"
 ) -> NegotiationRecord:
     savings_pct = (
@@ -66,6 +69,7 @@ def record_negotiation(
 
     rec = NegotiationRecord(
         po_number=po_number,
+        medicine_id=medicine_id,
         medicine=medicine,
         vendor_name=vendor_name,
         initial_price=initial_price,
@@ -87,6 +91,7 @@ def get_all_negotiations(db: Session) -> List[Dict[str, Any]]:
         results.append({
             "id": r.id,
             "po_number": r.po_number,
+            "medicine_id": r.medicine_id,
             "medicine": r.medicine,
             "vendor_name": r.vendor_name,
             "initial_price": r.initial_price,

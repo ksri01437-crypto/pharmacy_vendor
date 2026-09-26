@@ -21,6 +21,7 @@ class Vendor(Base):
     __tablename__ = "vendors"
 
     id = Column(Integer, primary_key=True, index=True)
+    medicine_id = Column(Integer, nullable=True, index=True)
     vendor_name = Column(String(100), nullable=False)
     medicine = Column(String(100), nullable=False, index=True)
     price = Column(Float, nullable=False)
@@ -36,6 +37,7 @@ class PurchaseOrder(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     po_number = Column(String(50), unique=True, index=True)
+    medicine_id = Column(Integer, nullable=True, index=True)
     medicine = Column(String(100), nullable=False)
     vendor = Column(String(100), nullable=False)
     quantity = Column(Integer, nullable=False)
@@ -52,6 +54,7 @@ class NegotiationRecord(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     po_number = Column(String(50), nullable=True, index=True)
+    medicine_id = Column(Integer, nullable=True, index=True)
     medicine = Column(String(100), nullable=False)
     vendor_name = Column(String(100), nullable=False)
     initial_price = Column(Float, nullable=False)

@@ -2,7 +2,7 @@
   {
     "id": 1,
     "medicine_name": "Paracetamol 500mg",
-    "current_stock": 25,
+    "current_stock": 120,
     "reorder_threshold": 60,
     "target_stock": 200,
     "daily_sales": 15,

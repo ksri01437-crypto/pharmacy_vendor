@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from backend.services.inventory_service import (
     get_items_needing_restock,
     get_all_inventory,
+    get_item_by_id,
     get_item_by_name
 )
 from backend.services.vendor_service import (
@@ -23,6 +24,7 @@ class RestockAgent:
     Main Pharmacy Store Agent responsible for automated restocking and vendor negotiation.
     Follows the Agentic Loop:
     [OBSERVE] -> [DECIDE] -> [ACT] -> [OBSERVE RESULT] -> [DECIDE AGAIN] -> [COMPLETE]
+    Operates strictly per medicine ID and name.
     """
 
     def __init__(self, db: Session):
@@ -40,29 +42,70 @@ class RestockAgent:
         }
         self.logs.append(entry)
 
-    def run_restocking_cycle(self, target_medicine: Optional[str] = None) -> Dict[str, Any]:
+    def run_restocking_cycle(
+        self,
+        target_medicine: Optional[str] = None,
+        target_medicine_id: Optional[int] = None
+    ) -> Dict[str, Any]:
         """
         Executes the complete end-to-end restocking and negotiation workflow.
-        Can be targeted at a specific medicine or run over all deficit inventory items.
+        Can be targeted at a specific medicine (by ID or name) or run over all deficit inventory items.
+        Healthy items above reorder thresholds are strictly excluded.
         """
         self.logs = []
         self._log("OBSERVE", "Initiating store scan. Inspecting current pharmacy inventory levels...")
 
-        # 1. OBSERVE: Check Inventory
         all_inventory = get_all_inventory(self.db)
-        needing_restock = get_items_needing_restock(self.db)
+        all_needing_restock = get_items_needing_restock(self.db)
 
-        if target_medicine:
-            needing_restock = [item for item in needing_restock if item["medicine_name"] == target_medicine]
+        # Filter strictly for target if specified
+        if target_medicine_id is not None:
+            target_items = [it for it in all_needing_restock if it["id"] == target_medicine_id]
+            if not target_items:
+                # Check if item exists in inventory but is healthy
+                existing_item = get_item_by_id(self.db, target_medicine_id)
+                if existing_item:
+                    self._log(
+                        "OBSERVE",
+                        f"Item '{existing_item.medicine_name}' (ID: {existing_item.id}) has {existing_item.current_stock} {existing_item.unit}, which is above reorder threshold ({existing_item.reorder_threshold}). Stock is healthy. Restocking skipped."
+                    )
+                    return {
+                        "status": "ITEM_ALREADY_HEALTHY",
+                        "logs": self.logs,
+                        "processed_items": [],
+                        "orders_generated": []
+                    }
+            needing_restock = target_items
+        elif target_medicine:
+            target_clean = target_medicine.strip().lower()
+            target_items = [it for it in all_needing_restock if it["medicine_name"].strip().lower() == target_clean]
+            if not target_items:
+                existing_item = get_item_by_name(self.db, target_medicine)
+                if existing_item:
+                    self._log(
+                        "OBSERVE",
+                        f"Item '{existing_item.medicine_name}' has {existing_item.current_stock} {existing_item.unit}, which is above reorder threshold ({existing_item.reorder_threshold}). Stock is healthy. Restocking skipped."
+                    )
+                    return {
+                        "status": "ITEM_ALREADY_HEALTHY",
+                        "logs": self.logs,
+                        "processed_items": [],
+                        "orders_generated": []
+                    }
+            needing_restock = target_items
+        else:
+            # All items currently requiring restocking
+            needing_restock = all_needing_restock
 
+        low_stock_names = ", ".join([item["medicine_name"] for item in needing_restock])
         self._log(
             "OBSERVE",
-            f"Inventory scan complete. Total items: {len(all_inventory)}. Low-stock alerts: {len(needing_restock)}.",
+            f"Inventory scan complete. Total catalog items: {len(all_inventory)}. Low-stock medicines requiring restocking: {len(needing_restock)} ({low_stock_names or 'None'}).",
             {"low_stock_count": len(needing_restock)}
         )
 
         if not needing_restock:
-            self._log("COMPLETE", "All inventory items are currently healthy above reorder thresholds. No action needed.")
+            self._log("COMPLETE", "All inventory items are currently healthy above reorder thresholds. No restock needed.")
             return {
                 "status": "NO_ACTION_REQUIRED",
                 "logs": self.logs,
@@ -73,7 +116,9 @@ class RestockAgent:
         processed_items = []
         generated_orders = []
 
+        # Process each deficit item independently
         for item in needing_restock:
+            med_id = item["id"]
             med_name = item["medicine_name"]
             curr_stock = item["current_stock"]
             threshold = item["reorder_threshold"]
@@ -82,49 +127,49 @@ class RestockAgent:
             # 2. DECIDE: Calculate Required Quantity
             self._log(
                 "DECIDE",
-                f"Deficit identified for {med_name} (Current: {curr_stock} {item['unit']}, Threshold: {threshold} {item['unit']}). Calculating required quantity...",
-                {"current_stock": curr_stock, "threshold": threshold, "daily_sales": item["daily_sales"]}
+                f"[{med_name}] Current stock is {curr_stock} {item['unit']} (≤ reorder threshold {threshold} {item['unit']}). Calculating required restock quantity...",
+                {"medicine_id": med_id, "medicine": med_name, "current_stock": curr_stock, "threshold": threshold}
             )
             self._log(
                 "DECIDE",
-                f"Calculated recommended restock: {req_qty} {item['unit']} to replenish buffer and reach target stock ({item['target_stock']} {item['unit']}).",
-                {"recommended_quantity": req_qty}
+                f"[{med_name}] Calculated recommended restock: {req_qty} {item['unit']} to safely reach target stock ({item['target_stock']} {item['unit']}).",
+                {"medicine_id": med_id, "recommended_quantity": req_qty}
             )
 
-            # 3. ACT: Request Vendor Offers
-            self._log("ACT", f"Querying vendor network for supply offers of {med_name} (Qty: {req_qty})...")
-            available_vendors = get_vendors_for_medicine(self.db, med_name)
+            # 3. ACT: Request Vendor Offers strictly for this medicine
+            self._log("ACT", f"[{med_name}] Querying vendor network for supply offers of {med_name} (Qty: {req_qty})...")
+            available_vendors = get_vendors_for_medicine(self.db, medicine_name=med_name, medicine_id=med_id)
 
             if not available_vendors:
-                self._log("OBSERVE RESULT", f"Warning: No registered vendors found supplying {med_name}. Manual escalation required.")
+                self._log("OBSERVE RESULT", f"[{med_name}] Warning: No registered vendors found supplying {med_name}. Skipping to next item.")
                 continue
 
             vendor_names = ", ".join([v.vendor_name for v in available_vendors])
-            self._log("OBSERVE RESULT", f"Found {len(available_vendors)} active vendors: {vendor_names}.")
+            self._log("OBSERVE RESULT", f"[{med_name}] Found {len(available_vendors)} active vendors: {vendor_names}.")
 
             # 4. DECIDE: Compare Vendors & Score Offers
-            self._log("DECIDE", f"Evaluating quotes against price, delivery lead time, MOQ constraints, and vendor reliability...")
+            self._log("DECIDE", f"[{med_name}] Evaluating quotes against price, delivery transit, MOQ requirements, and reliability...")
             comparison = compare_vendor_offers(available_vendors, req_qty)
 
             selected_candidate = comparison[0] if comparison else None
             if not selected_candidate:
-                self._log("OBSERVE RESULT", f"Failed to match any suitable vendor quotation for {med_name}.")
+                self._log("OBSERVE RESULT", f"[{med_name}] Failed to match any valid vendor quotation.")
                 continue
 
             self._log(
                 "DECIDE",
-                f"Best candidate selected: {selected_candidate['vendor_name']} (Base Price: ₹{selected_candidate['unit_price']:.2f}, Delivery: {selected_candidate['delivery_days']} days, MOQ: {selected_candidate['moq']}).",
+                f"[{med_name}] Best candidate selected: {selected_candidate['vendor_name']} (Listed Unit Price: ₹{selected_candidate['unit_price']:.2f}, Delivery: {selected_candidate['delivery_days']} days, MOQ: {selected_candidate['moq']}).",
                 {"candidate": selected_candidate}
             )
 
-            # 5. ACT: Negotiate with Candidate Vendor
+            # 5. ACT: Negotiate with Candidate Vendor specifically for this medicine
             order_qty = selected_candidate["effective_qty"]
             initial_price = selected_candidate["unit_price"]
             min_price = selected_candidate["min_acceptable_price"]
 
             self._log(
                 "ACT",
-                f"Initiating autonomous negotiation with {selected_candidate['vendor_name']} for {order_qty} units (Starting at ₹{initial_price:.2f}/unit)..."
+                f"[{med_name}] Initiating autonomous negotiation with {selected_candidate['vendor_name']} for {order_qty} units of {med_name} (Base price: ₹{initial_price:.2f}/unit)..."
             )
 
             negotiation_res = self.negotiator.negotiate(
@@ -142,19 +187,20 @@ class RestockAgent:
             # 6. OBSERVE RESULT: Analyze Negotiation Outcome
             self._log(
                 "OBSERVE RESULT",
-                f"Negotiation concluded with {selected_candidate['vendor_name']}. Final agreed price: ₹{final_price:.2f}/unit (Saved ₹{initial_price - final_price:.2f}/unit or {savings_pct}%).",
-                {"final_price": final_price, "savings_pct": savings_pct}
+                f"[{med_name}] Negotiation concluded with {selected_candidate['vendor_name']}. Final agreed price: ₹{final_price:.2f}/unit for {med_name} (Saved ₹{initial_price - final_price:.2f}/unit or {savings_pct}%).",
+                {"medicine": med_name, "final_price": final_price, "savings_pct": savings_pct}
             )
 
             # 7. DECIDE AGAIN: Final Deal Authorization
             self._log(
                 "DECIDE",
-                f"Deal validated. Authorizing automated Purchase Order generation for {order_qty} units at ₹{final_price:.2f}."
+                f"[{med_name}] Terms validated. Authorizing automated Purchase Order generation for {order_qty} units of {med_name} at ₹{final_price:.2f}/unit."
             )
 
-            # 8. COMPLETE: Issue Purchase Order & Update Inventory
+            # 8. COMPLETE: Issue Purchase Order & Replenish this specific medicine in Inventory
             po = create_purchase_order(
                 db=self.db,
+                medicine_id=med_id,
                 medicine=med_name,
                 vendor=selected_candidate["vendor_name"],
                 quantity=order_qty,
@@ -169,6 +215,7 @@ class RestockAgent:
             record_negotiation(
                 db=self.db,
                 po_number=po.po_number,
+                medicine_id=med_id,
                 medicine=med_name,
                 vendor_name=selected_candidate["vendor_name"],
                 initial_price=initial_price,
@@ -177,17 +224,18 @@ class RestockAgent:
                 status="Accepted"
             )
 
-            updated_item = get_item_by_name(self.db, med_name)
+            updated_item = get_item_by_id(self.db, med_id) or get_item_by_name(self.db, med_name)
             new_stock = updated_item.current_stock if updated_item else curr_stock + order_qty
 
             self._log(
                 "COMPLETE",
-                f"Purchase Order {po.po_number} issued. Inventory updated for {med_name}: new stock is {new_stock} {item['unit']}.",
-                {"po_number": po.po_number, "total_value": po.total, "new_stock": new_stock}
+                f"[{med_name}] Purchase Order {po.po_number} issued. Inventory updated: {med_name} new stock is {new_stock} {item['unit']} (restocked by +{order_qty}).",
+                {"po_number": po.po_number, "medicine": med_name, "new_stock": new_stock}
             )
 
             generated_orders.append({
                 "po_number": po.po_number,
+                "medicine_id": po.medicine_id,
                 "medicine": po.medicine,
                 "vendor": po.vendor,
                 "quantity": po.quantity,
@@ -196,18 +244,21 @@ class RestockAgent:
                 "total": po.total,
                 "delivery_days": po.delivery_days,
                 "status": po.status,
-                "created_at": po.created_at.isoformat()
+                "created_at": po.created_at.isoformat() if po.created_at else None
             })
 
             processed_items.append({
+                "medicine_id": med_id,
                 "medicine_name": med_name,
                 "restock_qty": order_qty,
                 "selected_vendor": selected_candidate["vendor_name"],
                 "initial_price": initial_price,
                 "final_price": final_price,
+                "delivery_days": selected_candidate["delivery_days"],
                 "total_cost": po.total,
                 "comparison": comparison,
-                "negotiation": negotiation_res
+                "negotiation": negotiation_res,
+                "po_number": po.po_number
             })
 
         self._log("COMPLETE", f"Restocking cycle successfully completed. Total orders created: {len(generated_orders)}.")

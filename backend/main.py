@@ -10,6 +10,7 @@ from backend.services.inventory_service import (
     seed_inventory_if_empty,
     get_all_inventory,
     get_items_needing_restock,
+    get_item_by_id,
     get_item_by_name
 )
 from backend.services.vendor_service import (
@@ -30,7 +31,7 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
     title="Pharmacy Smart Restocking & Vendor Negotiation Agent API",
-    version="1.0.0",
+    version="1.1.0",
     description="Backend API powering autonomous pharmacy inventory restocking and vendor negotiation."
 )
 
@@ -58,16 +59,19 @@ def startup_event():
 
 # Pydantic schemas
 class RestockRunRequest(BaseModel):
+    medicine_id: Optional[int] = None
     medicine_name: Optional[str] = None
 
 
 class DepleteRequest(BaseModel):
-    medicine_name: str
-    deplete_by: int = 50
+    medicine_id: Optional[int] = None
+    medicine_name: Optional[str] = None
+    deplete_by: int = 20
 
 
 class CompareRequest(BaseModel):
-    medicine_name: str
+    medicine_id: Optional[int] = None
+    medicine_name: Optional[str] = None
     quantity: int = 100
 
 
@@ -77,7 +81,7 @@ def root():
     return {
         "status": "online",
         "service": "Pharmacy Smart Restocking Agent",
-        "version": "1.0.0"
+        "version": "1.1.0"
     }
 
 
@@ -90,12 +94,12 @@ def health():
 def list_inventory(db: Session = Depends(get_db)):
     """Return all inventory items and restock status."""
     items = get_all_inventory(db)
-    restock_candidates = {item["medicine_name"]: item for item in get_items_needing_restock(db)}
+    restock_candidates = {item["id"]: item for item in get_items_needing_restock(db)}
 
     response = []
     for it in items:
-        is_low = it.medicine_name in restock_candidates
-        candidate_info = restock_candidates.get(it.medicine_name, {})
+        is_low = it.id in restock_candidates
+        candidate_info = restock_candidates.get(it.id, {})
         response.append({
             "id": it.id,
             "medicine_name": it.medicine_name,
@@ -120,19 +124,24 @@ def get_restock_candidates(db: Session = Depends(get_db)):
 
 
 @app.get("/api/vendors")
-def list_vendors(medicine: Optional[str] = None, db: Session = Depends(get_db)):
-    """Return all vendors or filter by medicine."""
-    if medicine:
-        return get_vendors_for_medicine(db, medicine)
+def list_vendors(
+    medicine: Optional[str] = None,
+    medicine_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Return all vendors or filter by medicine_id / medicine name."""
+    if medicine_id is not None or medicine:
+        return get_vendors_for_medicine(db, medicine_name=medicine, medicine_id=medicine_id)
     return get_all_vendors(db)
 
 
 @app.post("/api/vendors/compare")
 def compare_vendors(req: CompareRequest, db: Session = Depends(get_db)):
     """Compare and rank vendors offering a specific medicine."""
-    vendors = get_vendors_for_medicine(db, req.medicine_name)
+    vendors = get_vendors_for_medicine(db, medicine_name=req.medicine_name, medicine_id=req.medicine_id)
     if not vendors:
-        raise HTTPException(status_code=404, detail=f"No vendors found for '{req.medicine_name}'")
+        label = req.medicine_name or f"ID {req.medicine_id}"
+        raise HTTPException(status_code=404, detail=f"No vendors found for '{label}'")
     return compare_vendor_offers(vendors, req.quantity)
 
 
@@ -141,22 +150,33 @@ def trigger_agent(req: RestockRunRequest = RestockRunRequest(), db: Session = De
     """
     Execute the Store Restocking Agent cycle:
     OBSERVE -> DECIDE -> ACT -> OBSERVE RESULT -> DECIDE AGAIN -> COMPLETE
+    If medicine_id or medicine_name is provided, restocks ONLY that item.
+    If not provided, restocks ALL items currently below threshold.
     """
     agent = RestockAgent(db=db)
-    result = agent.run_restocking_cycle(target_medicine=req.medicine_name)
+    result = agent.run_restocking_cycle(
+        target_medicine=req.medicine_name,
+        target_medicine_id=req.medicine_id
+    )
     return result
 
 
 @app.get("/api/orders")
-def list_orders(db: Session = Depends(get_db)):
-    """Return all confirmed purchase orders."""
-    return get_all_orders(db)
+def list_orders(medicine_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """Return all confirmed purchase orders, optionally filtered by medicine_id."""
+    orders = get_all_orders(db)
+    if medicine_id is not None:
+        orders = [o for o in orders if o.medicine_id == medicine_id]
+    return orders
 
 
 @app.get("/api/negotiations")
-def list_negotiations(db: Session = Depends(get_db)):
+def list_negotiations(medicine_id: Optional[int] = None, db: Session = Depends(get_db)):
     """Return all negotiation records and conversation transcripts."""
-    return get_all_negotiations(db)
+    records = get_all_negotiations(db)
+    if medicine_id is not None:
+        records = [r for r in records if r.get("medicine_id") == medicine_id]
+    return records
 
 
 @app.post("/api/demo/reset")
@@ -171,13 +191,20 @@ def reset_demo_data(db: Session = Depends(get_db)):
 @app.post("/api/demo/deplete")
 def deplete_stock(req: DepleteRequest, db: Session = Depends(get_db)):
     """Artificially lower stock to demonstrate restocking workflow for any medicine."""
-    item = get_item_by_name(db, req.medicine_name)
+    item = None
+    if req.medicine_id is not None:
+        item = get_item_by_id(db, req.medicine_id)
+    if not item and req.medicine_name:
+        item = get_item_by_name(db, req.medicine_name)
+
     if not item:
         raise HTTPException(status_code=404, detail="Medicine not found")
+
     item.current_stock = max(0, item.current_stock - req.deplete_by)
     db.commit()
     db.refresh(item)
     return {
+        "id": item.id,
         "medicine_name": item.medicine_name,
         "new_stock": item.current_stock,
         "reorder_threshold": item.reorder_threshold,

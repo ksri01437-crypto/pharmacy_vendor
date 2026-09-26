@@ -21,6 +21,7 @@ def seed_inventory_if_empty(db: Session, force_reset: bool = False):
             data = json.load(f)
             for item in data:
                 db_item = InventoryItem(
+                    id=item.get("id"),
                     medicine_name=item["medicine_name"],
                     current_stock=item["current_stock"],
                     reorder_threshold=item["reorder_threshold"],
@@ -34,7 +35,11 @@ def seed_inventory_if_empty(db: Session, force_reset: bool = False):
 
 
 def get_all_inventory(db: Session) -> List[InventoryItem]:
-    return db.query(InventoryItem).all()
+    return db.query(InventoryItem).order_by(InventoryItem.id.asc()).all()
+
+
+def get_item_by_id(db: Session, item_id: int) -> Optional[InventoryItem]:
+    return db.query(InventoryItem).filter(InventoryItem.id == item_id).first()
 
 
 def get_item_by_name(db: Session, medicine_name: str) -> Optional[InventoryItem]:
@@ -47,7 +52,6 @@ def get_items_needing_restock(db: Session) -> List[Dict[str, Any]]:
     restock_list = []
     for item in items:
         if item.current_stock <= item.reorder_threshold:
-            # Calculation: Fill up to target_stock, with safety minimum of 10 days sales
             deficit = max(0, item.target_stock - item.current_stock)
             safety_buffer = item.daily_sales * 7
             recommended_qty = max(deficit, safety_buffer)
@@ -76,9 +80,19 @@ def get_items_needing_restock(db: Session) -> List[Dict[str, Any]]:
     return restock_list
 
 
-def update_stock(db: Session, medicine_name: str, quantity_to_add: int) -> Optional[InventoryItem]:
-    """Update stock quantity for a medicine."""
-    item = get_item_by_name(db, medicine_name)
+def update_stock(
+    db: Session,
+    medicine_name: Optional[str] = None,
+    quantity_to_add: int = 0,
+    medicine_id: Optional[int] = None
+) -> Optional[InventoryItem]:
+    """Update stock quantity for a medicine by ID or by name."""
+    item = None
+    if medicine_id is not None:
+        item = get_item_by_id(db, medicine_id)
+    if not item and medicine_name:
+        item = get_item_by_name(db, medicine_name)
+
     if item:
         item.current_stock += quantity_to_add
         db.commit()
